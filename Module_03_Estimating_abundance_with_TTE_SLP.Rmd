@@ -1,0 +1,335 @@
+---
+title: "Module 03: Estimating abundance with TTE"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{spaceNtime}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+author: "Read Barbee"
+date: "2024-08-17"
+---
+
+```{r setup, include = FALSE}
+library(dplyr)
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>"
+)
+```
+
+
+## Attribution
+This walkthrough is adapted from the vignette "using spaceNtime" (Moeller and Lukacs 2021). 
+
+When using the spaceNtime package, please cite [Moeller and Lukacs 2021](https://link.springer.com/content/pdf/10.1007/s42991-021-00181-8.pdf).
+
+
+## Purpose
+
+In this module, we will discuss the inputs and data structures required to run Time to Event (TTE) models using the spaceNtime package in R. By the end of this module, you should understand what data structures are required for TTE models, how to prepare the input files, and how to get an initial abundance estimate for your target species.
+
+## Background: What kind of data do we need for TTE?
+
+The major difference between the data inputs for STE and TTE models is that TTE relies on **MOTION TRIGGERED** photos instead of timelapse photos. Besides that, the 
+two data input components are essentially the same: 
+
+
+### 1. Photo information
+
+The first, called "df", is a data frame or tibble with one row for each photo from each station. 
+
+This must contain, at a minimum, these three columns (names and classes must match exactly): 
+
+- **cam**: The unique ID of the sampling site (any class)
+
+- **datetime**: The date and time of the photo (class POSIXct)
+
+- **count**: The count of your study species at each date and time. For STE and TTE, this can be simply species presence or absence (0 or 1) (class numeric)
+
+```{r, echo = F}
+df <- data.frame(
+  cam = c(1,1,2,2,2),
+  datetime = as.POSIXct(c("2016-01-02 12:00:00",
+                          "2016-01-03 13:12:00",
+                          "2016-01-02 12:00:00",
+                          "2016-01-02 14:00:00",
+                          "2016-01-03 16:53:42"),
+                        tz = "GMT"),
+  count = c(1, 0, 0, 1, 2)
+)
+```
+`r knitr::kable(df, caption = "df")`
+
+
+
+### 2. Camera deployment information
+
+
+The second, called "deploy",  is a data frame or tibble that contains information about the active periods and viewable areas for each camera. **Please note,** to get accurate estimates, this should include **all cameras** that were functioning, not just the ones that got pictures of your target species. 
+
+There are two ways to format this dataframe: the "Motion Sensor Format" and the "Timelapse Format". Either one can be used for STE timelapse data, but TTE requires the "Motion Sensor Format". For more information about the "Timelapse Format", see module 2. 
+
+#### The Motion Sensor Format
+
+In this format, each row represents a period of continuous functionality for a camera. If a camera ever went offline then came back on, it should have multiple rows. For cameras with multiple entries, the time periods should never overlap. Whenever the camera’s area changes, it should be entered as a new row. Setting area = 0 is equivalent to the camera not functioning. If a camera has any missing periods, it will be assumed that the camera was not working during that time.
+
+
+It will have the following columns, at a minimum:
+
+- **cam**: The unique ID of the sampling site (same class as df$cam)
+
+- **start**: The date and time of the start of continuous camera functioning (same class and tz as df$datetime)
+
+- **end**: The date and time of the end of continuous camera functioning (same class and tz as df$datetime)
+
+- **area**: the camera's visible area, in any units (class numeric)
+
+**Note**: While "area" can be in any units, I find it most intuitive to use m2, as it is easier to visualize than km2 for camera areas. 
+
+
+```{r, echo = F}
+
+deploy1 <- data.frame(
+  cam = c(1, 2, 2, 2),
+  start = as.POSIXct(c("2015-12-01 15:00:00",
+                       "2015-12-08 00:00:00", 
+                       "2016-01-01 00:00:00", 
+                       "2016-01-02 00:00:00"),
+                     tz = "GMT"),
+  end = as.POSIXct(c("2016-01-05 00:00:00", 
+                     "2015-12-19 03:30:00", 
+                     "2016-01-01 05:00:00",
+                     "2016-01-05 00:00:00"), 
+                   tz = "GMT"),
+  area = c(300, 200, 200, 450)
+)
+```
+`r knitr::kable(deploy1, caption = "deploy: The Motion Sensor Format")`
+
+
+## Preparing the data
+
+Now we're ready to get started! We'll be using example data from SLP. The dataset contains many prey species, but we will focus on the wild boar for this analysis since it is one of the most frequently detected species. 
+
+
+## Step 1: Load the required packages
+If you haven't already installed the spaceNtime package, please go back to Module 01: Installing spaceNtime.
+```{r, message = F}
+library(spaceNtime)
+library(tidyverse)
+```
+
+
+## Step 2: Import the example data
+
+```{r}
+
+#classified photos
+count_data <- read_csv("SCL/SLP/2022_SLP_Master_All_records_IDS_S3018_20221108_20230219.csv", show_col_types = FALSE) %>% 
+  janitor::clean_names()
+
+#camera deployment dates and visible areas
+cam_data <- read_csv("SCL/SLP/SLP_2022_CameraDetails.csv", show_col_types = FALSE) %>% 
+  janitor::clean_names()
+```
+
+
+TTE can only estimate abundance for one species at a time. We will use wild boar for this example since they are the most frequently detected. We will create a new column for the count of boar in each photo. All photos of other species will recieve a count of 0. After that we no longer need the species or group size columns, so we can remove them. We can also remove the study column because it is the same for all the data. 
+
+```{r}
+boar_data <- count_data %>% 
+  distinct(station, species, date_time_original, .keep_all = T) %>% #remove duplicate rows
+  mutate(boar = case_when(species == "Boar_Wild" ~ group, #make new column. Fill non-target species with 0s
+                          species != "Boar_Wild" ~ 0)) %>% 
+  select(station, date_time_original, boar) #subset the necessary columns
+```
+
+
+
+
+Let's examine the example data to see what we're working with:
+```{r, echo=F}
+dat_head <- head(boar_data)
+
+```
+`r knitr::kable(dat_head, caption = "Example Data")`
+
+
+```{r}
+range(boar_data$date_time)
+
+distinct(boar_data, station)
+
+distinct(boar_data, boar)
+
+```
+
+
+So we are left with 3 columns:
+
+- **station**: the name of the camera station. There appear to be 11 distinct stations (class: character)
+
+- **date_time**: the time stamp for each photo in the timelapse for each station. Note that the timezone is "UTC" by default. It is generally recommended to work in UTC to avoid errors due to timezone conversion. (class: dttm)
+
+
+- **boar**: the number of individuals of the target species detected in each photo. In this case, our values range from 0 to 1. For TTE, as with STE, the count doesn't really matter. We just need to know if the species was detected or not (1 or 0). (class: double)
+
+
+## Step 3: Create the photo information data frame
+
+Recall that for the "df" object, we only need columns for the camera station, time stamp, and the count of target animals, and they need to be named "cam", "datetime", and "count" respectively. We already subsetted the correct colums above, so let's just assign them the right names:
+```{r}
+df <- boar_data %>% 
+  select(station, date_time_original, boar) %>% 
+  rename(cam = station,
+         datetime = date_time_original,
+         count = boar)
+```
+
+`r knitr::kable(head(df), caption = "df")`
+
+
+That's all there is to it! On to the next step. 
+
+
+## Step 4: Create the deployment data frame
+
+Now we need to create our "deploy" object in the "Motion Sensor Format". Let's start by looking at the data we have for our camera deployments: 
+
+`r knitr::kable(head(cam_data), caption = "cam_data")`
+
+Here we have columns for station names, locations, deployment dates, and viewable area in km2. We only need station, start date, end date, and area, so lets subset and rename those here. Note that it is very important to record time stamps in addition to dates whenever possible. Because we don't know the exact start and end times for this dataset, we will set the times at 00:00:00 for each date. We will also convert the area from km2 to m2, because that is easier to visualize:
+
+```{r}
+deploy <- cam_data %>% 
+  select(camera_station, deployment_date, last_active_day_station, area_km2_1) %>% 
+  mutate(deployment_date = mdy_hms(paste(as.character(deployment_date), "00:00:00")), #add timestamps
+         last_active_day_station = mdy_hms(paste(as.character(last_active_day_station), "00:00:00")),
+         area_km2_1 = area_km2_1 * 1e6) %>% #convert area from km2 to m2
+  rename(cam = camera_station,
+         start = deployment_date,
+         end = last_active_day_station,
+         area = area_km2_1)
+```
+
+`r knitr::kable(head(deploy), caption = "deploy")`
+
+
+That's it! Note that in this example we don't have any instances where cameras went offline and then came back online or where the area of a camera changed, so we only have one row per station. 
+
+
+## Step 5: Specify the sampling occasions
+
+Next we need to define our sampling occasions. Sampling occasions work slightly differently for TTE than they do for STE. For TTE, each row in the sampling dataframe represents a unit of time in which we assume that our target species were not redistributing themselves. First, we need to specify the length of our sampling period. This is equal to the mean amount of time (in seconds) that it takes for an animal to cross the average viewshed of a camera. This can be calculated in different ways. A crude method for estimating sampling period exists with the function tte_samp_per():
+
+First, we need to calculate our mean camera area. In this case, we see that our mean area is 15.4 m2.
+```{r}
+mean(deploy$area)
+```
+
+Next, we need to figure out how long will it take a wild boar to cross that area. A previous study of boar movement indicated that wild boar tend to move between 0.2 and 1.2 km/hr on average in a 24 hour period (Podgorski et al. 2013). Let's use that as a benchmark and say that our average boar will move at an average speed of 1km/hr or 1000 m / 3600 sec. With this estimate, we can define our sampling period:
+
+```{r}
+per <- tte_samp_per(deploy, lps = 1000/3600)
+per
+#lps is the speed in m/hr with the hour defined in seconds.
+```
+
+Based on this function, we estimate that it will take an average boar around 14 seconds to cross our average 15.4 m2 camera veiwshed. Seem reasonable? Feel free to play with the values until you get an estimate you're happy with. 
+
+
+Once we have defined the length of our sampling period, we can build our sampling occasions. This can be done manually or with the function tte_build_occ(). For the latter, we need to define the following:
+
+-**study_dates**: the start and end dates of our study
+
+-**per_length**: the mean amount of time (in seconds) that it takes for an animal to cross the average viewshed of a camera.
+
+-**nper**: the number of TTE sampling periods per sampling occasion.
+
+-**time_btw**: the length of time between sampling occasions, allowing animals to re-randomize.
+
+
+We already defined our per_length above as **14.13 seconds**. For nper, lets say there are **24 periods** per sampling occasion. For the sake of this example, we'll assume that the boars randomly redistribute their locations **every 2 hours**, or 2 * 3600 seconds. These values are somewhat arbitrary, and selecting them is part of the "art" of these kinds of models.
+
+
+With this information in hand, we can now create our sampling occasion dataframe, called "occ".
+```{r}
+study_dates <- as.POSIXct(c("2022-11-08 00:00:00", "2023-02-19 00:00:00"), tz = "UTC")
+
+occ <- tte_build_occ(per_length = per,
+                 nper = 24,
+                 time_btw = 2 * 3600,
+                 study_start = study_dates[1],
+                 study_end = study_dates[2])
+```
+
+`r knitr::kable(head(occ), caption = "occ")`
+
+
+
+## Step 6: Build your encounter history
+
+Now we're finally ready to build our TTE encounter history! This is the final data object that we will use to run our model. 
+
+We can build our encounter history with one simple step using the tte_eh function in the spaceNtime package.
+
+```{r}
+tte_eh <- tte_build_eh(df, deploy, occ, per)
+```
+
+`r knitr::kable(head(tte_eh), caption = "TTE encounter history")`
+
+
+The encounter history has one row for every sampling occasion at every station and contains the following columns:
+
+-**occ**: the number of the sampling occasion from our "deploy" object. (class: integer)
+
+-**cam**: the name of the camera station. (class: character)
+
+-**start**: the timstamp of the start of the sampling occasion. (class: POSIXct)
+
+-**end**: the timstamp of the end of the sampling occasion. (class: POSIXct)
+
+-**int**: the interval between the start and end of the sampling occasion. (class: Interval)
+
+-**area**: the sampling area of the camera during the sampling occasion in the units specified in the "deploy" object. In this case it is in m2. (class: numeric)
+
+-**datetime**: the timestamp of the first detection of the target species during the sampling occasion. If the target species was not detected during the sampling occasion, this is NA. (class: POSIXct)
+
+-**count**: the number of target species individuals detected during the sampling occasion. If none were detected, this is NA. (class: numeric)
+
+-**TTE**: the number of sampling periods that elapsed before the first detection of the target species during the sampling occasion. If the target species was not detected, this is NA. (class: numeric)
+
+-**censor**: the number of sampling periods that elapse from the beginning to the end of the sampling occasion, also accounting for area of the camera. If no detections are made at a given camera on a given sampling occasion, TTE is assigned an NA and the occasion is right-censored. A right-censored event occurs when no animal is detected at a given camera on a given sampling occasion. Right-censoring indicates that the time to first encounter was greater than the length of the sampling occasion.
+
+## Step 7: Estimate abundance!
+
+Now that we've done the hard work of wrangling our data into an encounter history, we can estimate the TTE abundance using one simple line of code! All we need is the tte_estN_fn from the spaceNtime package. We only need to give the function 2 components:
+
+1. our encounter history
+2. the total area of our study (i.e. the area we want to estimate abundance for)
+
+Be sure to specify your study_area size in the same units as your camera visible areas! Let's start by estimating the density per km2 (1 * 1e6 m2). Then we can estimate to a larger area if we want to.
+
+```{r}
+tte_estN_fn(tte_eh, study_area = 1 * 1e6)
+```
+
+So we estimate that there are about 1.36 boar per km2 in our study area with a 95% confidence interval of 0.9 to 2.
+
+
+### More help
+
+If you want more information about the spaceNtime package, you can run the following chunk:
+
+For help files and vignettes:
+```{r}
+??spaceNtime
+```
+
+\
+The GitHub page for the R package is here: 
+https://github.com/annam21/spaceNtime
+
+\
+
