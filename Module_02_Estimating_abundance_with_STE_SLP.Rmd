@@ -186,7 +186,10 @@ range(count_data$date_time_original)
 
 distinct(count_data, station)
 
-distinct(count_data, species)
+count_data %>% 
+  group_by(species) %>% 
+  count()  %>% 
+  arrange(desc(n))
 
 distinct(count_data, group)
 ```
@@ -330,7 +333,7 @@ Now we will repeat the analysis with an augmented version of the dataset where w
 ## Step 1: Import the timelapse data
 ```{r}
 #classified timelapse photos
-tl_data <- read_csv("boar_timelapse_example_data_SLP.csv", show_col_types = FALSE) %>% 
+tl_data <- read_csv("boar_timelapse_example_data_SLP_v4.csv", show_col_types = FALSE) %>% 
   janitor::clean_names()
 
 ```
@@ -348,7 +351,7 @@ Again, for the "df" object, we only need columns for the camera station, time st
 ```{r}
 df_tl <- tl_data %>% 
   select(station, date_time, group) %>% 
-  rename(cam = station,
+  dplyr::rename(cam = station,
          datetime = date_time,
          count = group)
 ```
@@ -363,17 +366,17 @@ Now we need to create our "deploy" object in the Timelapse Format. Recall that w
 ```{r}
 deploy_tl <- tl_data %>% 
   select(station, date_time, area_m2) %>% 
-  rename(cam = station,
+  dplyr::rename(cam = station,
          start = date_time,
          area = area_m2) %>% 
   mutate(end = start, .after = start) #this line creates a time column for the end timestamp that is identical to the start timestamp
 ```
 
-`r knitr::kable(head(deploy_tl), caption = "deploy (Timelapse")`
+`r knitr::kable(head(deploy_tl), caption = "deploy (Timelapse)")`
 
 
 
-Note that you can use the "Motion Sensor Format" of the deploy frame here as well, and it should give you the same result. The "Timelapse Format" is recommended because any missing photos are interpreted as camera malfunctions rather than counts of 0, and you have more flexibility to specify camera area and functionality.
+Note that you can use the "Motion Sensor Format" of the deploy frame here as well, and it should give you a similar result. The "Timelapse Format" is recommended because any missing photos are interpreted as camera malfunctions rather than counts of 0, and you have more flexibility to specify camera area and functionality.
 
 
 ## Step 4: Specify the sampling occasions
@@ -394,7 +397,7 @@ occ_tl <- build_occ(samp_freq = 3600, # seconds between the start of each sampli
                  study_end = study_dates[2])
 ```
 
-`r knitr::kable(head(occ_tl), caption = "occ (Timelapse")`
+`r knitr::kable(head(occ_tl), caption = "occ (Timelapse)")`
 
 ## Step 5: Build your encounter history
 

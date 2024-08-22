@@ -335,7 +335,7 @@ Now we will repeat the analysis with an augmented version of the dataset where w
 ## Step 1: Import the timelapse data
 ```{r}
 #classified timelapse photos
-tl_data <- read_csv("boar_timelapse_example_data_SLP.csv", show_col_types = FALSE) %>% 
+tl_data <- read_csv("boar_timelapse_example_data_SLP_v4.csv", show_col_types = FALSE) %>% 
   janitor::clean_names()
 
 ```
